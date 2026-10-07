@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8f9fb" />
+    <meta name="description" content="로그인 없이 사내에서 함께 쓰는 채팅과 파일 공유 공간" />
+    <title>모아 — 사내 채팅</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/drop.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="채팅 공간">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>모아<span class="brand-dot">.</span></span></div>
+        <div class="workspace-label">WORKSPACE</div>
+        <div class="workspace-name"><span class="workspace-icon">M</span><span>우리 회사</span><span class="workspace-chevron" aria-hidden="true">⌄</span></div>
+        <div class="nav-heading">대화 공간</div>
+        <div class="room-link active"><span class="hash">#</span><span>전체 대화</span><span class="room-live" title="실시간 대화"></span></div>
+        <div class="sidebar-spacer"></div>
+        <div class="sidebar-note"><span class="note-spark" aria-hidden="true">✳</span><strong>바로 대화하세요</strong><p>계정 없이 이름만 정하면 메시지와 파일을 공유할 수 있어요.</p></div>
+        <div class="sidebar-footer">모아 · 사내 서버용</div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div class="room-title"><span class="mobile-logo" aria-hidden="true">모아<span>.</span></span><span class="title-hash">#</span><div><h1>전체 대화</h1><p>모두가 함께하는 공간</p></div></div>
+          <div class="top-actions"><span class="connection" id="connection"><span class="connection-dot"></span><span id="connection-text">연결 중</span></span><button type="button" class="files-button" id="files-button" aria-label="공유 파일 보기" title="공유 파일 보기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h5l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2Z"/><path d="M13 3v5h5M9 13h6M9 17h6"/></svg></button><label class="name-field"><span>내 이름</span><input id="name-input" maxlength="24" autocomplete="off" aria-label="내 이름" placeholder="이름 입력" /></label></div>
+        </header>
+
+        <section class="messages" id="messages" aria-label="채팅 메시지" aria-live="polite">
+          <div class="messages-inner" id="messages-inner"></div>
+        </section>
+
+        <div class="composer-wrap">
+          <div class="error-banner" id="error-banner" role="alert" hidden></div>
+          <form class="composer" id="composer">
+            <button type="button" class="attach-button" id="attach-button" aria-label="파일 첨부" title="파일 첨부"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20.8 11.6-8.7 8.7a5 5 0 0 1-7.1-7.1l9.2-9.2a3.5 3.5 0 0 1 5 5l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
+            <input type="file" id="file-input" multiple hidden />
+            <textarea id="message-input" rows="1" maxlength="4000" placeholder="전체 대화에 메시지 보내기" aria-label="메시지 입력"></textarea>
+            <button type="submit" class="send-button" id="send-button" aria-label="메시지 보내기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 15-8-4 16-3.2-6.8L4 12Z"/><path d="m11.8 13.2 7.2-9.2"/></svg></button>
+          </form>
+          <p class="composer-hint"><span id="upload-status" role="status">Enter 전송 · Shift + Enter 줄바꿈</span><span>파일 최대 25MB · 드래그해서 업로드</span></p>
+        </div>
+      </main>
+    </div>
+
+    <div class="drop-overlay" id="drop-overlay" aria-hidden="true" hidden>
+      <div class="drop-target"><span class="drop-icon" aria-hidden="true">↥</span><strong>파일을 여기에 놓으세요</strong><span>전체 대화에 바로 공유됩니다</span></div>
+    </div>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+    <aside class="files-drawer" id="files-drawer" aria-label="공유 파일" aria-hidden="true">
+      <div class="drawer-heading"><div><span class="drawer-eyebrow">SHARED FILES</span><h2>공유 파일</h2></div><button type="button" id="drawer-close" aria-label="닫기">×</button></div>
+      <p class="drawer-description">이 대화에서 주고받은 파일을 모아볼 수 있어요.</p>
+      <div id="file-list" class="file-list"></div>
+    </aside>
+  </body>
+</html>

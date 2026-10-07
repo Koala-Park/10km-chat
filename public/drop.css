@@ -1,0 +1,49 @@
+.drop-overlay[hidden] { display: none; }
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(238, 243, 255, .82);
+  backdrop-filter: blur(5px);
+  pointer-events: none;
+}
+
+.drop-target {
+  width: min(560px, 100%);
+  min-height: 290px;
+  border: 2px dashed #819af0;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, .92);
+  color: #283755;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 24px 80px rgba(45, 73, 145, .12);
+}
+
+.drop-icon {
+  width: 54px;
+  height: 54px;
+  margin-bottom: 13px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: #e9efff;
+  color: #4d6fea;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.drop-target strong { font-size: 20px; letter-spacing: -.6px; }
+.drop-target > span:last-child { color: #8995aa; font-size: 13px; }
+
+@media (max-width: 680px) {
+  .drop-target { min-height: 230px; }
+  .drop-target strong { font-size: 17px; }
+}
