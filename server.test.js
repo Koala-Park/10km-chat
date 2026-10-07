@@ -11,10 +11,10 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moa-chat-test-'));
 let child;
 let base;
 
-async function start() {
+async function start(dir = dataDir) {
   child = spawn(process.execPath, ['server.js'], {
     cwd: path.dirname(fileURLToPath(import.meta.url)),
-    env: { ...process.env, DATA_DIR: dataDir, HOST: '127.0.0.1', PORT: '0' },
+    env: { ...process.env, DATA_DIR: dir, HOST: '127.0.0.1', PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   // PORT=0 is useful for an ephemeral test port; server writes its chosen port below.
@@ -72,5 +72,30 @@ test('messages and files are shared and persist after restart', async () => {
   } finally {
     await stop();
     fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('messages.json from the previous version is migrated into chat.db once', async () => {
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moa-chat-legacy-'));
+  const legacy = [
+    { id: 'legacy-text', type: 'text', name: '민지', text: '예전 메시지', createdAt: '2026-09-17T00:33:20.869Z' },
+    { id: 'legacy-file', type: 'file', name: '준호', filename: 'old.txt', size: 3, createdAt: '2026-09-17T00:34:00.000Z' },
+  ];
+  fs.writeFileSync(path.join(legacyDir, 'messages.json'), JSON.stringify(legacy));
+  try {
+    await start(legacyDir);
+    const migrated = await (await fetch(`${base}/api/messages`)).json();
+    assert.deepEqual(migrated.messages, legacy);
+    assert.ok(!fs.existsSync(path.join(legacyDir, 'messages.json')));
+    assert.ok(fs.existsSync(path.join(legacyDir, 'messages.json.migrated')));
+    assert.ok(fs.existsSync(path.join(legacyDir, 'chat.db')));
+
+    await stop();
+    await start(legacyDir);
+    const again = await (await fetch(`${base}/api/messages`)).json();
+    assert.equal(again.messages.length, 2);
+  } finally {
+    await stop();
+    fs.rmSync(legacyDir, { recursive: true, force: true });
   }
 });

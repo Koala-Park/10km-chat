@@ -4,21 +4,70 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 const uploadDir = path.join(dataDir, 'uploads');
-const messagesFile = path.join(dataDir, 'messages.json');
+const dbFile = path.join(dataDir, 'chat.db');
+const legacyMessagesFile = path.join(dataDir, 'messages.json');
 const maxUploadBytes = 25 * 1024 * 1024;
 const maxRequestBytes = maxUploadBytes + 1024 * 1024;
+const recentLimit = 200;
 const clients = new Set();
 
 fs.mkdirSync(uploadDir, { recursive: true });
-let messages = [];
-if (fs.existsSync(messagesFile)) {
-  messages = JSON.parse(fs.readFileSync(messagesFile, 'utf8'));
-  if (!Array.isArray(messages)) throw new Error('Invalid messages store');
+const db = new DatabaseSync(dbFile);
+db.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA synchronous = NORMAL;
+  CREATE TABLE IF NOT EXISTS messages (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL CHECK (type IN ('text', 'file')),
+    name TEXT NOT NULL,
+    text TEXT,
+    filename TEXT,
+    size INTEGER,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS messages_type_seq ON messages (type, seq);
+`);
+
+const columns = '(id, type, name, text, filename, size, created_at) VALUES (:id, :type, :name, :text, :filename, :size, :createdAt)';
+const insertMessage = db.prepare(`INSERT INTO messages ${columns}`);
+const selectRecent = db.prepare('SELECT * FROM (SELECT * FROM messages ORDER BY seq DESC LIMIT ?) ORDER BY seq');
+const selectFiles = db.prepare("SELECT * FROM messages WHERE type = 'file' ORDER BY seq");
+const selectFile = db.prepare("SELECT * FROM messages WHERE id = ? AND type = 'file'");
+
+function messageParams(message) {
+  return { text: null, filename: null, size: null, ...message };
+}
+
+function toMessage(row) {
+  const message = { id: row.id, type: row.type, name: row.name };
+  if (row.type === 'text') message.text = row.text;
+  else Object.assign(message, { filename: row.filename, size: row.size });
+  message.createdAt = row.created_at;
+  return message;
+}
+
+// 예전 버전이 쓰던 messages.json이 있으면 DB로 옮기고, 원본은 .migrated로 이름을 바꿔 백업으로 남긴다.
+if (fs.existsSync(legacyMessagesFile)) {
+  const legacy = JSON.parse(fs.readFileSync(legacyMessagesFile, 'utf8'));
+  if (!Array.isArray(legacy)) throw new Error('Invalid messages store');
+  const insertLegacy = db.prepare(`INSERT OR IGNORE INTO messages ${columns}`);
+  db.exec('BEGIN');
+  try {
+    for (const message of legacy) insertLegacy.run(messageParams(message));
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  fs.renameSync(legacyMessagesFile, `${legacyMessagesFile}.migrated`);
+  console.error(`messages.json의 메시지 ${legacy.length}개를 chat.db로 옮겼습니다.`);
 }
 
 const mimeTypes = {
@@ -36,12 +85,6 @@ function sendJson(res, status, value) {
 
 function fail(res, status, error) {
   sendJson(res, status, { error });
-}
-
-function saveMessages() {
-  const temp = `${messagesFile}.${randomUUID()}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(messages));
-  fs.renameSync(temp, messagesFile);
 }
 
 function publish(message) {
@@ -100,11 +143,11 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === 'GET' && pathname === '/api/messages') {
-    return sendJson(res, 200, { messages: messages.slice(-200) });
+    return sendJson(res, 200, { messages: selectRecent.all(recentLimit).map(toMessage) });
   }
 
   if (req.method === 'GET' && pathname === '/api/files') {
-    return sendJson(res, 200, { files: messages.filter(item => item.type === 'file') });
+    return sendJson(res, 200, { files: selectFiles.all().map(toMessage) });
   }
 
   if (req.method === 'GET' && pathname === '/api/events') {
@@ -128,8 +171,7 @@ async function handleRequest(req, res) {
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     if (!text || text.length > 4000) return fail(res, 400, '메시지는 1~4000자로 입력해 주세요.');
     const message = { id: randomUUID(), type: 'text', name: cleanName(input.name), text, createdAt: new Date().toISOString() };
-    messages.push(message);
-    saveMessages();
+    insertMessage.run(messageParams(message));
     publish(message);
     return sendJson(res, 201, { message });
   }
@@ -146,16 +188,17 @@ async function handleRequest(req, res) {
     const id = randomUUID();
     fs.writeFileSync(path.join(uploadDir, id), Buffer.from(await file.arrayBuffer()), { flag: 'wx' });
     const message = { id, type: 'file', name: cleanName(form.get('name')), filename: name, size: file.size, createdAt: new Date().toISOString() };
-    try { messages.push(message); saveMessages(); }
-    catch (error) { messages.pop(); fs.unlinkSync(path.join(uploadDir, id)); throw error; }
+    try { insertMessage.run(messageParams(message)); }
+    catch (error) { fs.unlinkSync(path.join(uploadDir, id)); throw error; }
     publish(message);
     return sendJson(res, 201, { message });
   }
 
   if (req.method === 'GET' && pathname.startsWith('/api/files/')) {
     const id = pathname.slice('/api/files/'.length);
-    const message = messages.find(item => item.id === id && item.type === 'file');
-    if (!message) return fail(res, 404, '파일을 찾을 수 없습니다.');
+    const row = selectFile.get(id);
+    if (!row) return fail(res, 404, '파일을 찾을 수 없습니다.');
+    const message = toMessage(row);
     const filename = path.join(uploadDir, id);
     if (!fs.existsSync(filename)) return fail(res, 404, '파일을 찾을 수 없습니다.');
     res.writeHead(200, {
