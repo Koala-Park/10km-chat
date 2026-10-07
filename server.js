@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -12,8 +13,8 @@ const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, 'data'));
 const uploadDir = path.join(dataDir, 'uploads');
 const dbFile = path.join(dataDir, 'chat.db');
 const legacyMessagesFile = path.join(dataDir, 'messages.json');
-const maxUploadBytes = 25 * 1024 * 1024;
-const maxRequestBytes = maxUploadBytes + 1024 * 1024;
+// 파일 업로드는 크기 제한 없이 디스크로 바로 흘려 쓰고, 이 제한은 JSON 메시지 요청에만 적용한다.
+const maxJsonBytes = 1024 * 1024;
 const recentLimit = 200;
 const clients = new Set();
 
@@ -117,7 +118,7 @@ async function readBody(req) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > maxRequestBytes) {
+    if (size > maxJsonBytes) {
       const error = new Error('request_too_large');
       error.status = 413;
       throw error;
@@ -177,19 +178,26 @@ async function handleRequest(req, res) {
   }
 
   if (req.method === 'POST' && pathname === '/api/files') {
-    const contentType = req.headers['content-type'] || '';
-    if (!contentType.startsWith('multipart/form-data;')) return fail(res, 415, '파일 업로드 형식이 올바르지 않습니다.');
-    const body = await readBody(req);
-    const form = await new Request('http://localhost/upload', { method: 'POST', headers: { 'content-type': contentType }, body }).formData();
-    const file = form.get('file');
-    if (!file || typeof file.arrayBuffer !== 'function') return fail(res, 400, '파일을 선택해 주세요.');
-    if (file.size === 0 || file.size > maxUploadBytes) return fail(res, 413, '파일 크기는 25MB 이하여야 합니다.');
-    const name = safeFilename(file.name);
+    // 본문은 파일 그대로(application/octet-stream), 파일명과 보낸 사람은 쿼리로 받는다.
+    if (req.headers['content-type'] !== 'application/octet-stream') return fail(res, 415, '파일 업로드 형식이 올바르지 않습니다.');
     const id = randomUUID();
-    fs.writeFileSync(path.join(uploadDir, id), Buffer.from(await file.arrayBuffer()), { flag: 'wx' });
-    const message = { id, type: 'file', name: cleanName(form.get('name')), filename: name, size: file.size, createdAt: new Date().toISOString() };
+    const target = path.join(uploadDir, id);
+    let size = 0;
+    try {
+      await pipeline(req, async function* (source) {
+        for await (const chunk of source) { size += chunk.length; yield chunk; }
+      }, fs.createWriteStream(target, { flags: 'wx' }));
+    } catch (error) {
+      fs.rmSync(target, { force: true });
+      throw error;
+    }
+    if (size === 0) {
+      fs.rmSync(target, { force: true });
+      return fail(res, 400, '빈 파일은 올릴 수 없습니다.');
+    }
+    const message = { id, type: 'file', name: cleanName(url.searchParams.get('name')), filename: safeFilename(url.searchParams.get('filename')), size, createdAt: new Date().toISOString() };
     try { insertMessage.run(messageParams(message)); }
-    catch (error) { fs.unlinkSync(path.join(uploadDir, id)); throw error; }
+    catch (error) { fs.rmSync(target, { force: true }); throw error; }
     publish(message);
     return sendJson(res, 201, { message });
   }
@@ -223,7 +231,8 @@ async function handleRequest(req, res) {
 }
 
 export function createServer() {
-  return http.createServer((req, res) => {
+  // 큰 파일 업로드가 Node 기본값(5분)에 끊기지 않도록 요청 시간 제한을 끈다.
+  return http.createServer({ requestTimeout: 0 }, (req, res) => {
     handleRequest(req, res).catch(error => {
       console.error(error);
       if (!res.headersSent) fail(res, error.status || 500, error.status === 413 ? '요청 크기가 너무 큽니다.' : '잠시 후 다시 시도해 주세요.');

@@ -32,7 +32,8 @@ function formatDay(date) {
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 function iconFile() {
@@ -136,6 +137,25 @@ async function request(url, options) {
   return data;
 }
 
+// 큰 파일은 오래 걸리므로 fetch 대신 XHR로 올려 진행률을 보여 준다.
+function uploadFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const params = new URLSearchParams({ name: nameInput.value, filename: file.name });
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/files?${params}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.addEventListener('progress', event => { if (event.lengthComputable) onProgress(event.loaded / event.total); });
+    xhr.addEventListener('load', () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data.error || '업로드에 실패했습니다.'));
+    });
+    xhr.addEventListener('error', () => reject(new Error('연결이 끊겨 업로드하지 못했습니다.')));
+    xhr.send(file);
+  });
+}
+
 async function loadMessages() {
   try {
     const data = await request('/api/messages');
@@ -210,16 +230,14 @@ async function uploadFiles(files) {
   const errors = [];
   try {
     for (const [index, file] of queued.entries()) {
-      uploadStatus.textContent = `파일 ${index + 1}/${queued.length} 업로드 중…`;
-      if (!file.size || file.size > 25 * 1024 * 1024) {
-        errors.push(`${file.name}: 파일 크기는 1B~25MB여야 합니다.`);
+      const label = `파일 ${index + 1}/${queued.length} 업로드 중…`;
+      uploadStatus.textContent = label;
+      if (!file.size) {
+        errors.push(`${file.name}: 빈 파일은 올릴 수 없습니다.`);
         continue;
       }
-      const data = new FormData();
-      data.append('name', nameInput.value);
-      data.append('file', file);
       try {
-        const result = await request('/api/files', { method: 'POST', body: data });
+        const result = await uploadFile(file, ratio => { uploadStatus.textContent = `${label} ${Math.floor(ratio * 100)}%`; });
         allMessages.set(result.message.id, result.message);
         if (sharedFiles && !sharedFiles.some(item => item.id === result.message.id)) sharedFiles.push(result.message);
         render();

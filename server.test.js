@@ -30,6 +30,11 @@ async function stop() {
   await once(child, 'exit');
 }
 
+function upload(name, filename, body) {
+  const params = new URLSearchParams({ name, filename });
+  return fetch(`${base}/api/files?${params}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body });
+}
+
 test('messages and files are shared and persist after restart', async () => {
   try {
     await start();
@@ -45,12 +50,11 @@ test('messages and files are shared and persist after restart', async () => {
     assert.equal(message.name, '민지');
     assert.equal(message.text, '안녕하세요');
 
-    const form = new FormData();
-    form.append('name', '준호');
-    form.append('file', new Blob(['공유 문서'], { type: 'text/plain' }), 'meeting.txt');
-    const uploaded = await fetch(`${base}/api/files`, { method: 'POST', body: form });
+    const uploaded = await upload('준호', 'meeting.txt', '공유 문서');
     assert.equal(uploaded.status, 201);
     const file = (await uploaded.json()).message;
+    assert.equal(file.filename, 'meeting.txt');
+    assert.equal(file.name, '준호');
     const fileList = await (await fetch(`${base}/api/files`)).json();
     assert.deepEqual(fileList.files.map(item => item.id), [file.id]);
     const download = await fetch(`${base}/api/files/${file.id}`);
@@ -97,5 +101,30 @@ test('messages.json from the previous version is migrated into chat.db once', as
   } finally {
     await stop();
     fs.rmSync(legacyDir, { recursive: true, force: true });
+  }
+});
+
+test('files larger than the old 25MB limit upload and download intact', async () => {
+  const bigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moa-chat-big-'));
+  const big = Buffer.alloc(60 * 1024 * 1024);
+  for (let i = 0; i < big.length; i += 4096) big[i] = i % 251;
+  try {
+    await start(bigDir);
+    const uploaded = await upload('민지', 'video.mp4', big);
+    assert.equal(uploaded.status, 201);
+    const file = (await uploaded.json()).message;
+    assert.equal(file.size, big.length);
+    assert.equal(fs.statSync(path.join(bigDir, 'uploads', file.id)).size, big.length);
+    const download = Buffer.from(await (await fetch(`${base}/api/files/${file.id}`)).arrayBuffer());
+    assert.ok(download.equals(big));
+
+    const empty = await upload('민지', 'empty.txt', '');
+    assert.equal(empty.status, 400);
+    const multipart = await fetch(`${base}/api/files`, { method: 'POST', body: new FormData() });
+    assert.equal(multipart.status, 415);
+    assert.deepEqual(fs.readdirSync(path.join(bigDir, 'uploads')), [file.id]);
+  } finally {
+    await stop();
+    fs.rmSync(bigDir, { recursive: true, force: true });
   }
 });
