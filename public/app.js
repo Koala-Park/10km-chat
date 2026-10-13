@@ -14,7 +14,11 @@ const sendButton = document.getElementById('send-button');
 const attachButton = document.getElementById('attach-button');
 const uploadStatus = document.getElementById('upload-status');
 const dropOverlay = document.getElementById('drop-overlay');
+const retentionNote = document.getElementById('retention-note');
 const allMessages = new Map();
+// 이미지 요소는 다시 그릴 때마다 새로 만들면 높이가 0으로 돌아가 화면이 튀므로 메시지별로 재사용한다.
+const imageNodes = new Map();
+let stickToBottom = true;
 let busy = false;
 let sharedFiles = null;
 
@@ -59,6 +63,63 @@ function fileLink(message, compact = false) {
   return link;
 }
 
+function imagePreview(message) {
+  let link = imageNodes.get(message.id);
+  if (link) return link;
+  link = document.createElement('a');
+  link.className = 'image-preview';
+  link.href = `/api/files/${encodeURIComponent(message.id)}/image`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.title = '원본 크기로 보기';
+  const image = document.createElement('img');
+  image.src = link.href;
+  image.alt = message.filename;
+  image.loading = 'lazy';
+  image.decoding = 'async';
+  // 이미지가 늦게 로드되며 높이가 생겨도 맨 아래를 보고 있었다면 계속 맨 아래에 둔다.
+  image.addEventListener('load', () => { if (stickToBottom) messagesEl.scrollTop = messagesEl.scrollHeight; });
+  image.addEventListener('error', () => link.classList.add('broken'));
+  link.append(image);
+  imageNodes.set(message.id, link);
+  return link;
+}
+
+// 같은 사람이 한 번에 올린 파일(같은 batch)이 연달아 있으면 메시지 하나로 묶는다.
+function groupMessages(sorted) {
+  const groups = [];
+  for (const message of sorted) {
+    const last = groups.at(-1)?.at(-1);
+    const sameBatch = message.batch && last?.batch === message.batch && last.name === message.name
+      && new Date(last.createdAt).toDateString() === new Date(message.createdAt).toDateString();
+    if (sameBatch) groups.at(-1).push(message);
+    else groups.push([message]);
+  }
+  return groups;
+}
+
+function appendFiles(body, files) {
+  const images = files.filter(file => file.imageType);
+  if (images.length === 1) {
+    imageNodes.get(images[0].id)?.classList.remove('tile');
+    body.append(imagePreview(images[0]), fileLink(images[0]));
+  } else if (images.length > 1) {
+    const grid = document.createElement('div');
+    grid.className = 'image-grid';
+    grid.style.setProperty('--columns', images.length === 2 || images.length === 4 ? 2 : 3);
+    for (const image of images) {
+      const tile = imagePreview(image);
+      tile.classList.add('tile');
+      grid.append(tile);
+    }
+    const caption = document.createElement('p');
+    caption.className = 'image-grid-caption';
+    caption.textContent = `이미지 ${images.length}장 · ${formatSize(images.reduce((total, image) => total + image.size, 0))} · 눌러서 원본 보기`;
+    body.append(grid, caption);
+  }
+  for (const file of files) if (!file.imageType) body.append(fileLink(file));
+}
+
 function render() {
   const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 110;
   const sorted = [...allMessages.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
@@ -72,7 +133,8 @@ function render() {
   }
 
   let lastDay = '';
-  for (const message of sorted) {
+  for (const group of groupMessages(sorted)) {
+    const [message] = group;
     const day = new Date(message.createdAt).toDateString();
     if (day !== lastDay) {
       const separator = document.createElement('div');
@@ -97,7 +159,7 @@ function render() {
     time.textContent = formatTime(message.createdAt);
     meta.append(author, time);
     body.append(meta);
-    if (message.type === 'file') body.append(fileLink(message));
+    if (message.type === 'file') appendFiles(body, group);
     else {
       const text = document.createElement('p');
       text.className = 'message-text';
@@ -108,8 +170,37 @@ function render() {
     messagesInner.append(row);
   }
 
+  for (const id of imageNodes.keys()) if (!allMessages.has(id)) imageNodes.delete(id);
   renderFiles();
-  if (nearBottom || sorted.length <= 1) requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; });
+  if (nearBottom || sorted.length <= 1) {
+    stickToBottom = true;
+    requestAnimationFrame(() => { messagesEl.scrollTop = messagesEl.scrollHeight; });
+  }
+}
+
+messagesEl.addEventListener('scroll', () => {
+  stickToBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 110;
+});
+
+function formatDays(days) {
+  return Number.isInteger(days) ? `${days}일` : `${Math.round(days * 24)}시간`;
+}
+
+function renderRetention(retention) {
+  const { messageDays = 0, fileDays = 0 } = retention || {};
+  const fileLimit = messageDays && fileDays ? Math.min(messageDays, fileDays) : messageDays || fileDays;
+  let note = '';
+  if (messageDays && fileLimit < messageDays) note = `대화는 ${formatDays(messageDays)}, 파일은 ${formatDays(fileLimit)} 뒤 자동 삭제`;
+  else if (messageDays) note = `${formatDays(messageDays)} 지난 대화와 파일은 자동 삭제`;
+  else if (fileDays) note = `파일은 ${formatDays(fileDays)} 뒤 자동 삭제`;
+  retentionNote.textContent = note;
+  retentionNote.hidden = !note;
+}
+
+function removeMessages(ids) {
+  for (const id of ids) allMessages.delete(id);
+  if (sharedFiles) sharedFiles = sharedFiles.filter(file => !ids.includes(file.id));
+  render();
 }
 
 function renderFiles() {
@@ -138,9 +229,10 @@ async function request(url, options) {
 }
 
 // 큰 파일은 오래 걸리므로 fetch 대신 XHR로 올려 진행률을 보여 준다.
-function uploadFile(file, onProgress) {
+function uploadFile(file, batch, onProgress) {
   return new Promise((resolve, reject) => {
     const params = new URLSearchParams({ name: nameInput.value, filename: file.name });
+    if (batch) params.set('batch', batch);
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/files?${params}`);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
@@ -159,7 +251,10 @@ function uploadFile(file, onProgress) {
 async function loadMessages() {
   try {
     const data = await request('/api/messages');
+    // 끊긴 동안 정리된 메시지가 남지 않도록 서버가 준 목록으로 통째로 바꾼다.
+    allMessages.clear();
     data.messages.forEach(message => allMessages.set(message.id, message));
+    renderRetention(data.retention);
     render();
     clearError();
   } catch (error) { showError('대화를 불러오지 못했습니다. 연결을 확인한 뒤 새로고침해 주세요.'); }
@@ -180,6 +275,10 @@ function connect() {
       render();
     } catch { /* Ignore malformed event and recover on reconnect. */ }
   };
+  events.addEventListener('removed', event => {
+    try { removeMessages(JSON.parse(event.data).ids); }
+    catch { /* Ignore malformed event and recover on reconnect. */ }
+  });
   events.onerror = () => {
     connection.classList.remove('online');
     connectionText.textContent = '재연결 중';
@@ -228,6 +327,8 @@ async function uploadFiles(files) {
   setBusy(true);
   clearError();
   const errors = [];
+  // crypto.randomUUID는 HTTPS에서만 쓸 수 있어 사내망 http 주소에서도 되는 getRandomValues로 만든다.
+  const batch = queued.length > 1 ? Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('') : null;
   try {
     for (const [index, file] of queued.entries()) {
       const label = `파일 ${index + 1}/${queued.length} 업로드 중…`;
@@ -237,7 +338,7 @@ async function uploadFiles(files) {
         continue;
       }
       try {
-        const result = await uploadFile(file, ratio => { uploadStatus.textContent = `${label} ${Math.floor(ratio * 100)}%`; });
+        const result = await uploadFile(file, batch, ratio => { uploadStatus.textContent = `${label} ${Math.floor(ratio * 100)}%`; });
         allMessages.set(result.message.id, result.message);
         if (sharedFiles && !sharedFiles.some(item => item.id === result.message.id)) sharedFiles.push(result.message);
         render();
@@ -250,6 +351,25 @@ async function uploadFiles(files) {
     if (errors.length) showError(errors.join(' '));
   }
 }
+
+// 클립보드 이미지는 브라우저마다 image.png 같은 이름으로 들어오므로 보낸 시각을 붙여 구분한다.
+function pastedFile(file, index) {
+  if (file.name && !/^image\.\w+$/i.test(file.name)) return file;
+  const extension = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace(/\W.*$/, '');
+  const pad = value => String(value).padStart(2, '0');
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}.${pad(now.getMinutes())}.${pad(now.getSeconds())}`;
+  return new File([file], `붙여넣은 이미지 ${stamp}${index ? ` (${index + 1})` : ''}.${extension}`, { type: file.type });
+}
+
+// 스크린샷처럼 클립보드에 파일만 있으면 바로 올린다. 글자도 함께 있으면(엑셀 셀 복사 등) 평소처럼 글자를 붙여 넣는다.
+document.addEventListener('paste', event => {
+  const data = event.clipboardData;
+  if (!data?.files.length || data.types.includes('text/plain')) return;
+  event.preventDefault();
+  if (busy) return showError('업로드가 끝난 뒤 다시 붙여 넣어 주세요.');
+  uploadFiles(Array.from(data.files, pastedFile));
+});
 
 attachButton.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
