@@ -102,3 +102,64 @@
 
 .image-preview.tile:hover img { opacity: .88; }
 .image-grid-caption { margin: 7px 0 0; color: #98a3b4; font-size: 11px; }
+
+.attachments[hidden] { display: none; }
+
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.attachment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  max-width: 240px;
+  padding: 0 14px 0 12px;
+  border: 1px solid #e3e8f1;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.attachment.image {
+  width: 64px;
+  padding: 0;
+  overflow: visible;
+}
+
+.attachment.image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 9px;
+}
+
+.attachment .file-info { min-width: 0; display: flex; flex-direction: column; }
+.attachment .file-info strong { font-size: 12px; color: #34405a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment .file-info small { font-size: 11px; color: #98a3b4; }
+
+.attachment-remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #2b354b;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.attachment-remove:hover { background: #4d6fea; }
+.attachment-remove:disabled { opacity: .4; cursor: wait; }
+.message-text + .image-grid, .message-text + .image-preview, .message-text + .file-link { margin-top: 8px; }

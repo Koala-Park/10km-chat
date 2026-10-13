@@ -164,6 +164,20 @@ test('image uploads are recognized by content and served inline', async () => {
     assert.deepEqual(listed.messages.map(item => item.imageType), ['image/png', undefined, undefined, 'image/png', 'image/png', 'image/png']);
     assert.deepEqual(listed.messages.map(item => item.batch), [undefined, undefined, undefined, 'batch-1', 'batch-1', undefined]);
     assert.deepEqual([second.id, second.batch], [listed.messages[4].id, 'batch-1']);
+
+    // 파일과 함께 보낸 글도 같은 batch로 묶인다.
+    const caption = await (await fetch(`${base}/api/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '민지', text: '스크린샷 공유해요', batch: 'batch-1' }),
+    })).json();
+    assert.equal(caption.message.batch, 'batch-1');
+    const plain = await (await fetch(`${base}/api/messages`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '민지', text: '그냥 글', batch: { bad: true } }),
+    })).json();
+    assert.equal(plain.message.batch, undefined);
+    const relisted = await (await fetch(`${base}/api/messages`)).json();
+    assert.equal(relisted.messages.find(item => item.id === caption.message.id).batch, 'batch-1');
     assert.deepEqual(listed.retention, { messageDays: 0, fileDays: 0 });
   } finally {
     await stop();

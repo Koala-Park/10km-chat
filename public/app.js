@@ -15,12 +15,17 @@ const attachButton = document.getElementById('attach-button');
 const uploadStatus = document.getElementById('upload-status');
 const dropOverlay = document.getElementById('drop-overlay');
 const retentionNote = document.getElementById('retention-note');
+const attachmentsEl = document.getElementById('attachments');
+const defaultPlaceholder = messageInput.placeholder;
+const defaultHint = uploadStatus.textContent;
 const allMessages = new Map();
 // 이미지 요소는 다시 그릴 때마다 새로 만들면 높이가 0으로 돌아가 화면이 튀므로 메시지별로 재사용한다.
 const imageNodes = new Map();
 let stickToBottom = true;
 let busy = false;
 let sharedFiles = null;
+// 보내기 전에 입력창 위에 올려 둔 첨부 파일. 이미지는 blob 주소로 미리 보여 준다.
+let pending = [];
 
 nameInput.value = localStorage.getItem('moa-name') || '';
 nameInput.addEventListener('input', () => localStorage.setItem('moa-name', nameInput.value.trim()));
@@ -159,13 +164,16 @@ function render() {
     time.textContent = formatTime(message.createdAt);
     meta.append(author, time);
     body.append(meta);
-    if (message.type === 'file') appendFiles(body, group);
-    else {
+    // 파일과 함께 보낸 글은 같은 묶음이라 한 메시지 안에서 글을 먼저, 파일을 아래에 보여 준다.
+    for (const item of group) {
+      if (item.type !== 'text') continue;
       const text = document.createElement('p');
       text.className = 'message-text';
-      text.textContent = message.text;
+      text.textContent = item.text;
       body.append(text);
     }
+    const files = group.filter(item => item.type === 'file');
+    if (files.length) appendFiles(body, files);
     row.append(avatar, body);
     messagesInner.append(row);
   }
@@ -291,23 +299,110 @@ function setBusy(value) {
   fileInput.disabled = value;
   attachButton.disabled = value;
   sendButton.classList.toggle('busy', value);
+  renderAttachments();
 }
 
+function addMessage(message) {
+  allMessages.set(message.id, message);
+  if (sharedFiles && message.type === 'file' && !sharedFiles.some(item => item.id === message.id)) sharedFiles.push(message);
+  render();
+}
+
+// crypto.randomUUID는 HTTPS에서만 쓸 수 있어 사내망 http 주소에서도 되는 getRandomValues로 만든다.
+function newBatchId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function renderAttachments() {
+  attachmentsEl.replaceChildren();
+  attachmentsEl.hidden = !pending.length;
+  messageInput.placeholder = pending.length ? '메시지를 덧붙이거나 Enter로 바로 보내기' : defaultPlaceholder;
+  for (const item of pending) {
+    const chip = document.createElement('div');
+    chip.className = item.url ? 'attachment image' : 'attachment';
+    chip.title = `${item.file.name} · ${formatSize(item.file.size)}`;
+    if (item.url) {
+      const image = document.createElement('img');
+      image.src = item.url;
+      image.alt = item.file.name;
+      // HEIC처럼 브라우저가 못 그리는 이미지는 파일 아이콘으로 대신한다.
+      image.addEventListener('error', () => { chip.classList.remove('image'); image.replaceWith(iconFile()); });
+      chip.append(image);
+    } else {
+      const info = document.createElement('span');
+      info.className = 'file-info';
+      const name = document.createElement('strong');
+      name.textContent = item.file.name;
+      const size = document.createElement('small');
+      size.textContent = formatSize(item.file.size);
+      info.append(name, size);
+      chip.append(iconFile(), info);
+    }
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'attachment-remove';
+    remove.textContent = '×';
+    remove.disabled = busy;
+    remove.setAttribute('aria-label', `${item.file.name} 첨부 빼기`);
+    remove.addEventListener('click', () => { removeAttachment(item); messageInput.focus(); });
+    chip.append(remove);
+    attachmentsEl.append(chip);
+  }
+}
+
+function addAttachments(files) {
+  const added = Array.from(files || []);
+  if (!added.length) return;
+  clearError();
+  const empty = added.filter(file => !file.size);
+  for (const file of added) {
+    if (file.size) pending.push({ file, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null });
+  }
+  if (empty.length) showError(`${empty.map(file => file.name).join(', ')}: 빈 파일은 올릴 수 없습니다.`);
+  renderAttachments();
+  messageInput.focus();
+}
+
+function removeAttachment(item) {
+  if (item.url) URL.revokeObjectURL(item.url);
+  pending = pending.filter(entry => entry !== item);
+  renderAttachments();
+}
+
+// 슬랙처럼 첨부를 먼저 올리고 글을 같은 묶음으로 보낸다. 올리지 못한 파일이 있으면 글은 보내지 않고 남겨 둔다.
 composer.addEventListener('submit', async event => {
   event.preventDefault();
   if (busy) return;
   const text = messageInput.value.trim();
-  if (!text) return;
+  const queued = pending.slice();
+  if (!text && !queued.length) return;
   setBusy(true);
   clearError();
+  const batch = queued.length > 1 || (queued.length && text) ? newBatchId() : null;
+  const failed = [];
   try {
-    const data = await request('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nameInput.value, text }) });
-    allMessages.set(data.message.id, data.message);
-    messageInput.value = '';
-    messageInput.style.height = '';
-    render();
+    for (const [index, item] of queued.entries()) {
+      const label = `파일 ${index + 1}/${queued.length} 업로드 중…`;
+      uploadStatus.textContent = label;
+      try {
+        const result = await uploadFile(item.file, batch, ratio => { uploadStatus.textContent = `${label} ${Math.floor(ratio * 100)}%`; });
+        addMessage(result.message);
+        removeAttachment(item);
+      } catch (error) { failed.push(`${item.file.name}: ${error.message || '업로드에 실패했습니다.'}`); }
+    }
+    if (failed.length) throw new Error(`${failed.join(' ')} 올리지 못한 파일은 입력창 위에 남겨 두었어요.`);
+    if (text) {
+      const data = await request('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: nameInput.value, text, batch }) });
+      addMessage(data.message);
+      messageInput.value = '';
+      messageInput.style.height = '';
+    }
   } catch (error) { showError(error.message || '메시지를 보내지 못했습니다.'); }
-  finally { setBusy(false); messageInput.focus(); }
+  finally {
+    setBusy(false);
+    uploadStatus.textContent = defaultHint;
+    messageInput.focus();
+  }
 });
 
 messageInput.addEventListener('keydown', event => {
@@ -321,37 +416,6 @@ messageInput.addEventListener('input', () => {
   messageInput.style.height = `${Math.min(messageInput.scrollHeight, 160)}px`;
 });
 
-async function uploadFiles(files) {
-  const queued = Array.from(files || []);
-  if (!queued.length || busy) return;
-  setBusy(true);
-  clearError();
-  const errors = [];
-  // crypto.randomUUID는 HTTPS에서만 쓸 수 있어 사내망 http 주소에서도 되는 getRandomValues로 만든다.
-  const batch = queued.length > 1 ? Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('') : null;
-  try {
-    for (const [index, file] of queued.entries()) {
-      const label = `파일 ${index + 1}/${queued.length} 업로드 중…`;
-      uploadStatus.textContent = label;
-      if (!file.size) {
-        errors.push(`${file.name}: 빈 파일은 올릴 수 없습니다.`);
-        continue;
-      }
-      try {
-        const result = await uploadFile(file, batch, ratio => { uploadStatus.textContent = `${label} ${Math.floor(ratio * 100)}%`; });
-        allMessages.set(result.message.id, result.message);
-        if (sharedFiles && !sharedFiles.some(item => item.id === result.message.id)) sharedFiles.push(result.message);
-        render();
-      } catch (error) { errors.push(`${file.name}: ${error.message || '업로드에 실패했습니다.'}`); }
-    }
-  } finally {
-    setBusy(false);
-    fileInput.value = '';
-    uploadStatus.textContent = 'Enter 전송 · Shift + Enter 줄바꿈';
-    if (errors.length) showError(errors.join(' '));
-  }
-}
-
 // 클립보드 이미지는 브라우저마다 image.png 같은 이름으로 들어오므로 보낸 시각을 붙여 구분한다.
 function pastedFile(file, index) {
   if (file.name && !/^image\.\w+$/i.test(file.name)) return file;
@@ -362,17 +426,19 @@ function pastedFile(file, index) {
   return new File([file], `붙여넣은 이미지 ${stamp}${index ? ` (${index + 1})` : ''}.${extension}`, { type: file.type });
 }
 
-// 스크린샷처럼 클립보드에 파일만 있으면 바로 올린다. 글자도 함께 있으면(엑셀 셀 복사 등) 평소처럼 글자를 붙여 넣는다.
+// 스크린샷처럼 클립보드에 파일만 있으면 첨부로 올려 둔다. 글자도 함께 있으면(엑셀 셀 복사 등) 평소처럼 글자를 붙여 넣는다.
 document.addEventListener('paste', event => {
   const data = event.clipboardData;
   if (!data?.files.length || data.types.includes('text/plain')) return;
   event.preventDefault();
-  if (busy) return showError('업로드가 끝난 뒤 다시 붙여 넣어 주세요.');
-  uploadFiles(Array.from(data.files, pastedFile));
+  addAttachments(Array.from(data.files, pastedFile));
 });
 
 attachButton.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+fileInput.addEventListener('change', () => {
+  addAttachments(fileInput.files);
+  fileInput.value = '';
+});
 
 let dragDepth = 0;
 function isFileDrag(event) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
@@ -398,7 +464,7 @@ document.addEventListener('drop', event => {
   if (!isFileDrag(event)) return;
   event.preventDefault();
   hideDropOverlay();
-  uploadFiles(event.dataTransfer.files);
+  addAttachments(event.dataTransfer.files);
 });
 document.addEventListener('dragend', hideDropOverlay);
 window.addEventListener('blur', hideDropOverlay);

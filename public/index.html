@@ -36,19 +36,20 @@
 
         <div class="composer-wrap">
           <div class="error-banner" id="error-banner" role="alert" hidden></div>
+          <div class="attachments" id="attachments" aria-label="보낼 첨부 파일" hidden></div>
           <form class="composer" id="composer">
             <button type="button" class="attach-button" id="attach-button" aria-label="파일 첨부" title="파일 첨부"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m20.8 11.6-8.7 8.7a5 5 0 0 1-7.1-7.1l9.2-9.2a3.5 3.5 0 0 1 5 5l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg></button>
             <input type="file" id="file-input" multiple hidden />
             <textarea id="message-input" rows="1" maxlength="4000" placeholder="전체 대화에 메시지 보내기" aria-label="메시지 입력"></textarea>
             <button type="submit" class="send-button" id="send-button" aria-label="메시지 보내기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 12 15-8-4 16-3.2-6.8L4 12Z"/><path d="m11.8 13.2 7.2-9.2"/></svg></button>
           </form>
-          <p class="composer-hint"><span id="upload-status" role="status">Enter 전송 · Shift + Enter 줄바꿈</span><span>파일은 드래그 · 이미지는 붙여넣기로 업로드</span></p>
+          <p class="composer-hint"><span id="upload-status" role="status">Enter 전송 · Shift + Enter 줄바꿈</span><span>파일은 드래그하거나 붙여넣어 첨부</span></p>
         </div>
       </main>
     </div>
 
     <div class="drop-overlay" id="drop-overlay" aria-hidden="true" hidden>
-      <div class="drop-target"><span class="drop-icon" aria-hidden="true">↥</span><strong>파일을 여기에 놓으세요</strong><span>전체 대화에 바로 공유됩니다</span></div>
+      <div class="drop-target"><span class="drop-icon" aria-hidden="true">↥</span><strong>파일을 여기에 놓으세요</strong><span>보내기 전에 확인하고 메시지를 덧붙일 수 있어요</span></div>
     </div>
 
     <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>

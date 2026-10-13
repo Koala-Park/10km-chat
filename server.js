@@ -84,8 +84,8 @@ function toMessage(row) {
   else {
     Object.assign(message, { filename: row.filename, size: row.size });
     if (row.content_type?.startsWith('image/')) message.imageType = row.content_type;
-    if (row.batch_id) message.batch = row.batch_id;
   }
+  if (row.batch_id) message.batch = row.batch_id;
   message.createdAt = row.created_at;
   return message;
 }
@@ -204,6 +204,11 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
+// 함께 보낸 파일·메시지를 묶는 값. 형식이 이상하면 묶지 않는다.
+function cleanBatch(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(value) ? value : undefined;
+}
+
 function safeFilename(value) {
   return path.basename(String(value || 'file')).replace(/[\x00-\x1f\x7f/\\]/g, '_').slice(0, 180) || 'file';
 }
@@ -251,6 +256,8 @@ async function handleRequest(req, res) {
     const text = typeof input.text === 'string' ? input.text.trim() : '';
     if (!text || text.length > 4000) return fail(res, 400, '메시지는 1~4000자로 입력해 주세요.');
     const message = { id: randomUUID(), type: 'text', name: cleanName(input.name), text, createdAt: new Date().toISOString() };
+    const batch = cleanBatch(input.batch);
+    if (batch) message.batch = batch;
     insertMessage.run(messageParams(message));
     publish(message);
     return sendJson(res, 201, { message });
@@ -282,8 +289,8 @@ async function handleRequest(req, res) {
     const message = { id, type: 'file', name: cleanName(url.searchParams.get('name')), filename: safeFilename(url.searchParams.get('filename')), size, createdAt: new Date().toISOString() };
     const contentType = sniffImageType(head);
     if (contentType !== genericType) message.imageType = contentType;
-    const batch = url.searchParams.get('batch');
-    if (batch && /^[A-Za-z0-9-]{1,64}$/.test(batch)) message.batch = batch;
+    const batch = cleanBatch(url.searchParams.get('batch'));
+    if (batch) message.batch = batch;
     try { insertMessage.run({ ...messageParams(message), contentType }); }
     catch (error) { fs.rmSync(target, { force: true }); throw error; }
     publish(message);
@@ -322,7 +329,7 @@ async function handleRequest(req, res) {
   res.writeHead(200, {
     'Content-Type': mimeTypes[path.extname(file)] || 'application/octet-stream',
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   });
   fs.createReadStream(file).pipe(res);
 }
